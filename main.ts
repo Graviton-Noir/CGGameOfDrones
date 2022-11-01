@@ -4,24 +4,6 @@ type Point = {
     y: number;
 };
 
-class Vector2D {
-    p1: Point
-    p2: Point
-
-    constructor(p1: Point, p2: Point) {
-        this.p1 = {x: p1.x, y: p1.y};
-        this.p2 = {x: p2.x, y: p2.y};
-    }
-
-    length(): number {
-        return Math.sqrt(Math.pow(this.p1.x + this.p2.x, 2) + Math.pow(this.p1.y + this.p2.y, 2))
-    }
-
-    normalize(): void {
-
-    }
-}
-
 function vector2DLength(p1: Point, p2: Point): number {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2))
 }
@@ -30,9 +12,13 @@ class Zone {
     id: number
     position: Point
     ownership: number
+    futurOwnerShip: number
 
     overringDrones: number[] = []
     futurOverringDrones: number[] = []
+
+    incomingDrone: Drone[] = []
+
     enemyPower: number
 
     constructor(p: Point, id: number) {
@@ -40,6 +26,8 @@ class Zone {
         this.id = id
 
         this.ownership = -1
+        this.futurOwnerShip = -1
+
         this.enemyPower = 0
     }
 
@@ -74,30 +62,57 @@ class Zone {
         this.overringDrones = Object.assign([], output)
         this.futurOverringDrones = Object.assign([], output)
     }
+
+    sortClosestDrones(droneArray: Drone[]): void {
+
+        droneArray.sort((a, b) => {
+            let distA : number = vector2DLength(a.position, this.position)
+            let distB : number = vector2DLength(b.position, this.position)
+
+            if (distA < distB) {
+                return -1
+            }
+            else if (distA > distB) {
+                return 1
+            }
+            return 0
+        })
+    }
 }
 let zoneArray: Zone[] = []
 const zoneWidth: number = 100
 
 class Drone {
     position: Point
+    lastPosition : Point
     destination: Point
     destinationZone : number
     id : number
 
     onZone : number
+    targetZone : number
+    timeToTarget : number
+
     isMoving : boolean
 
     constructor() {
         this.position = {x: 0, y: 0}
+        this.lastPosition = {x: 0, y: 0}
         this.destination = {x: 0, y: 0}
         this.onZone = -1
+        this.targetZone = -1
         this.isMoving = false
         this.destinationZone = -1
+        this.timeToTarget = 0
         this.id = -1
     }
 
     setPosition(p: Point) {
         this.position = {x: p.x, y: p.y}
+    }
+
+    setLastPosition() {
+        this.lastPosition = {x: this.position.x, y: this.position.y}
     }
 
     setDestination(p: Point) {
@@ -143,6 +158,46 @@ class Drone {
     setIsMoving(): void {
         this.isMoving = (vector2DLength(this.position, this.destination) > zoneWidth)
     }
+
+    setTargetZone(zoneArray: Zone[]) {
+
+        this.targetZone = -1
+
+        for (let i = 0; i < zoneArray.length; i++) {
+            let dronePositionShift: Point = {x: this.position.x - zoneArray[i].position.x,
+                                            y: this.position.y - zoneArray[i].position.y}
+
+            let dr = Math.sqrt(Math.pow(this.lastPosition.x - this.position.x, 2) + Math.pow(this.lastPosition.y - this.position.y, 2))
+            let theD = this.position.x * this.lastPosition.y - this.lastPosition.x * this.position.y
+
+            if (40000 * dr * dr - theD * theD > 0) {
+                this.targetZone = zoneArray[i].id
+                return
+            }
+        }
+    }
+
+    setTimeToTarget(zoneArray: Zone[]): void {
+        if (this.targetZone != -1) {
+            this.timeToTarget = vector2DLength(this.position, zoneArray[this.targetZone].position) / 100
+        }
+    }
+
+    sortClosestZones(zoneArray: Zone[]): void {
+
+        zoneArray.sort((a, b) => {
+            let distA : number = vector2DLength(this.position, a.position)
+            let distB : number = vector2DLength(this.position, b.position)
+
+            if (distA < distB) {
+                return -1
+            }
+            else if (distA > distB) {
+                return 1
+            }
+            return 0
+        })
+    }
 }
 
 class Player {
@@ -150,8 +205,39 @@ class Player {
 
     droneArray: Drone[] = []
 
+    pointsGain: number
+    futurPointsGain: number
+
     constructor(id: number) {
         this.id = id;
+        this.pointsGain = 0
+        this.futurPointsGain = 0
+    }
+
+    setPointsGain(zoneArray: Zone[]): void {
+
+        let pt = 0
+
+        for (let i = 0; i < Z; i++) {
+            if (zoneArray[i].ownership == this.id) {
+                pt++
+            }
+        }
+
+        this.pointsGain = pt
+    }
+
+    setFuturPointsGain(zoneArray: Zone[]): void {
+
+        let pt = 0
+
+        for (let i = 0; i < Z; i++) {
+            if (zoneArray[i].futurOwnerShip == this.id) {
+                pt++
+            }
+        }
+
+        this.pointsGain = pt
     }
 }
 let playerArray: Player[] = []
@@ -161,6 +247,10 @@ class Strategist {
     ptrPlayerArray: Player[]
     ptrZoneArray: Zone[]
 
+    /* Remembers the last destinations */
+    zoneConfigMem: Zone[] = []
+    playerConfigMem: Player[] = []
+
     constructor(playerArray: Player[], zoneArray: Zone[]) {
         this.ptrPlayerArray = playerArray
         this.ptrZoneArray = zoneArray
@@ -168,96 +258,123 @@ class Strategist {
 
     tactics() {
 
-        let droneHasMoved: boolean[] = Array(D).fill(false)
-
-        for (let i = 0; i < D; i++) {
-            let currDrone = this.ptrPlayerArray[ID].droneArray[i]
-
-            if (currDrone.isMoving) {
-                droneHasMoved[i] = true
-            }
-        }
-
-        this.tacticLeaveToReinforce(droneHasMoved)
-        this.tacticRushClosest(droneHasMoved)
-
-        /* Debug purpose */
-        for (let i = 0; i < D; i++) {
-            if (droneHasMoved[i] == false) {
-                console.error("Warning: drone " + i + " has not moved !")
-            }
-        }
-    }
-
-    tacticRushClosest(droneHasMoved: boolean[]) {
-
-        for (let i = 0; i < D; i++) {
-            let currDrone = this.ptrPlayerArray[ID].droneArray[i]
-            let closest = 9999
-            let zoneMem = 0
-
-            if (droneHasMoved[i] == true)
-                continue
-
-            for (let j = 0; j < Z; j++) {
-                let currZone = this.ptrZoneArray[j]
-                let currDistance = vector2DLength(currDrone.position, currZone.position)
-
-                if (currDistance < closest) {
-                    closest = currDistance
-                    zoneMem = j
-                }
-            }
-
-            if (currDrone.position.x != this.ptrZoneArray[zoneMem].position.x ||
-                currDrone.position.y != this.ptrZoneArray[zoneMem].position.y )
-            {  
-                droneHasMoved[i] = true
-            }
-
-            currDrone.setDestination(this.ptrZoneArray[zoneMem].position)
-            currDrone.destinationZone = zoneMem
-            this.ptrZoneArray[zoneMem].futurOverringDrones[ID]++
-        }
-    }
-
-    tacticLeaveToReinforce(droneHasMoved: boolean[]) {
-
+        //let droneHasMoved: boolean[] = Array(D).fill(false)
         let availableDrones: Drone[] = []
         let weakZones: Zone[] = []
 
-        let doesZoneNeedSupport: boolean = false
+        /* Copies */
+        this.playerConfigMem = Object.assign({}, this.ptrPlayerArray)
+        this.zoneConfigMem = Object.assign({}, this.ptrZoneArray)
 
-        // Compter tous ceux qui sont en trop sur une planete : donne une premiere force de frappe
-        // Si aucune planete n'est renforçable de cette maniere, prendre en plus celle qui sont perdu
-        // Trouve la planete la plus faible à attaquer
-        // balancer tous ceux qui sont mobilisable
+        this.computeAvailableDrones(availableDrones)
+
+        /* ---- Agressif tactic */
+
+        this.computeWeakestZonesAtk(weakZones)
+        this.sortWeakestZones(weakZones)
+
+        for (let i = 0; i < availableDrones.length; i++) {
+            let currDrone = availableDrones[i]
+            //let hasMoved: boolean = droneHasMoved[currDrone.id] // In case has already moved, if functions are added in the future
+
+            // behavior functions
+            if (this.tacticGoToWeakZone(currDrone, availableDrones.length, weakZones)) {
+                availableDrones.splice(i, 1)
+                continue
+            }
+            this.tacticGoToClosestZone(currDrone, this.ptrZoneArray)
+        }
+
+        this.keepBetterConfiguration()
+
+        /* ---- Defense tactic */
+
+        this.computeWeakestZonesDef(weakZones)
+        this.sortWeakestZones(weakZones)
+
+        for (let i = 0; i < availableDrones.length; i++) {
+            let currDrone = availableDrones[i]
+            //let hasMoved: boolean = droneHasMoved[currDrone.id] // In case has already moved, if functions are added in the future
+
+            // behavior functions
+            if (this.tacticGoToWeakZone(currDrone, availableDrones.length, weakZones)) {
+                availableDrones.splice(i, 1)
+                continue
+            }
+            this.tacticGoToClosestZone(currDrone, this.ptrZoneArray)
+        }
+
+        this.keepBetterConfiguration()
+    }
+
+    keepBetterConfiguration(): void {
+
+        let myPointsGain = 0
+        let enemyPointsGain = 0
+
+        for (let i = 0; i < this.zoneConfigMem.length; i++) {
+            if ()
+        }
+    }
+
+    tacticGoToWeakZone(drone: Drone, availableDronesNb: number, weakZones: Zone[]): boolean {
+
+        for (let i = 0; i < weakZones.length; i++) {
+
+            let nbDroneToSend: number = weakZones[i].futurOverringDrones[ID] + availableDronesNb - weakZones[i].enemyPower
+            if (nbDroneToSend <= 0) {
+                continue
+            }
+
+            drone.setDestination(weakZones[i].position)
+            drone.destinationZone = weakZones[i].id
+            if (drone.onZone != weakZones[i].id) {
+                weakZones[i].futurOverringDrones[ID]++
+            }
+            return true
+        }
+
+        return false
+    }
+
+    tacticGoToClosestZone(drone: Drone, zones: Zone[]): void {
+
+        drone.sortClosestZones(zones)
+        drone.setDestination(zones[0].position)
+        drone.destinationZone = zones[0].id
+        if (drone.onZone != zones[0].id) {
+            zones[0].futurOverringDrones[ID]++
+        }
+    }
+
+    computeAvailableDrones(availableDrones: Drone[]): void {
 
         for (let i = 0; i < D; i++) {
             let currDrone = this.ptrPlayerArray[ID].droneArray[i]
 
-            console.error(currDrone.onZone)
-
             if (currDrone.onZone != -1)
             {
-                //console.error(currDrone.onZone + " " + this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID] + " " + this.ptrZoneArray[currDrone.onZone].enemyPower)
 
                 /* If the zone if owned, having the same amount of drone with the enemy shouldn't change the ownership */
                 if (this.ptrZoneArray[currDrone.onZone].ownership == ID && this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID] > this.ptrZoneArray[currDrone.onZone].enemyPower)
                 {
                     availableDrones.push(currDrone)
+                    this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID]--
                 }
                 else if (this.ptrZoneArray[currDrone.onZone].ownership == -1 && this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID] == this.ptrZoneArray[currDrone.onZone].enemyPower)
                 {
                     availableDrones.push(currDrone)
+                    this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID]--
                 }
                 else if (this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID] - 1 > this.ptrZoneArray[currDrone.onZone].enemyPower)
                 {
                     availableDrones.push(currDrone)
+                    this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID]--
                     //console.error(this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID] + " " + this.ptrZoneArray[currDrone.onZone].enemyPower)
                 }
                 else if (this.ptrZoneArray[currDrone.onZone].enemyPower > Z / 2) {
                     availableDrones.push(currDrone)
+                    this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID]--
                 }
                 else {
                     let NbOfStrongestEnemy = 0
@@ -270,72 +387,53 @@ class Strategist {
 
                     if (NbOfStrongestEnemy >= 2) {
                         availableDrones.push(currDrone)
+                        this.ptrZoneArray[currDrone.onZone].futurOverringDrones[ID]--
                     }
                 }
             }
         }
+    }
 
+    computeWeakestZonesAtk(weakZones: Zone[]): void {
         for (let j = 0; j < Z; j++) {
             let currZone = this.ptrZoneArray[j]
+            let isWeak = false
+
             if (currZone.ownership != ID) {
+                isWeak = true
+            }
+
+            if (isWeak) {
                 weakZones.push(currZone)
             }
         }
+    }
 
-        doesZoneNeedSupport = (weakZones.length > 0)
+    computeWeakestZonesDef(weakZones: Zone[]): void {
+        for (let j = 0; j < Z; j++) {
+            let currZone = this.ptrZoneArray[j]
+            let isWeak = false
 
-        if (doesZoneNeedSupport) {
+            if (currZone.ownership == ID) {
+                isWeak = true
+            }
 
-            weakZones.sort((a, b) => {
-                if (a.enemyPower - a.futurOverringDrones[ID] < b.enemyPower - b.futurOverringDrones[ID]) {
-                    return -1
-                }
-                else if (a.enemyPower - a.futurOverringDrones[ID] > b.enemyPower - b.futurOverringDrones[ID]) {
-                    return 1
-                }
-                return 0
-            })
-
-            for (let i = 0; i < weakZones.length; i++) {
-
-                let nbDroneToSend: number = weakZones[i].futurOverringDrones[ID] + availableDrones.length - weakZones[i].enemyPower
-
-                availableDrones.sort((a, b) => {
-                    let distA : number = vector2DLength(a.position, weakZones[i].position)
-                    let distB : number = vector2DLength(b.position, weakZones[i].position)
-
-                    if (distA < distB) {
-                        return -1
-                    }
-                    else if (distA > distB) {
-                        return 1
-                    }
-                    return 0
-                })
-
-                console.error(weakZones[i].futurOverringDrones[ID] + "(" + weakZones[i].id +  ")" +
-                    " + " + 
-                    availableDrones.length +
-                    " - " + 
-                    weakZones[i].enemyPower +
-                    " : " + nbDroneToSend)
-
-                if (nbDroneToSend > 0) {
-                    for (let j = 0; j < availableDrones.length && j < nbDroneToSend; j++) {
-
-                        availableDrones[j].setDestination(weakZones[i].position)
-                        availableDrones[j].destinationZone = weakZones[i].id
-                        weakZones[i].futurOverringDrones[ID]++
-                        console.error("sent : " + availableDrones[j].id + " to : " + weakZones[i].id)
-                        droneHasMoved[j] = true
-
-                        this.ptrZoneArray[availableDrones[j].onZone].futurOverringDrones[ID]--
-
-                        availableDrones.splice(j, 1)
-                    }
-                }
+            if (isWeak) {
+                weakZones.push(currZone)
             }
         }
+    }
+
+    sortWeakestZones(weakZones: Zone[]): void {
+        weakZones.sort((a, b) => {
+            if (a.enemyPower - a.futurOverringDrones[ID] < b.enemyPower - b.futurOverringDrones[ID]) {
+                return -1
+            }
+            else if (a.enemyPower - a.futurOverringDrones[ID] > b.enemyPower - b.futurOverringDrones[ID]) {
+                return 1
+            }
+            return 0
+        })
     }
 }
 
@@ -379,10 +477,16 @@ while (true) {
             if (i == ID) {
                 playerArray[i].droneArray[j].setIsMoving()
             }
+
+            playerArray[i].droneArray[j].setLastPosition()
             playerArray[i].droneArray[j].setPosition({x: DX, y: DY})
             playerArray[i].droneArray[j].setOnZone(zoneArray)
             playerArray[i].droneArray[j].setId(j)
+            playerArray[i].droneArray[j].setTargetZone(zoneArray)
+            playerArray[i].droneArray[j].setTimeToTarget(zoneArray)
         }
+
+        playerArray[i].setPointsGain(zoneArray)
     }
 
     strategist.tactics()
